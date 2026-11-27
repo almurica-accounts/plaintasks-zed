@@ -27,11 +27,30 @@ jobs:
           git fetch upstream main
 
       - name: Merge upstream into fork
+        id: merge
         run: |
           if git merge --no-edit upstream/main; then
-            git push origin main
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
           else
-            echo "::error::Merge conflict syncing upstream. Resolve manually with 'git sync-upstream'."
-            git merge --abort || true
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            echo "Merge conflict detected in:"
+            git diff --name-only --diff-filter=U
+            git diff --name-only --diff-filter=U > conflict-files.txt
+          fi
+
+      - name: Resolve conflicts with OpenCode
+        if: steps.merge.outputs.conflict == 'true'
+        run: |
+          npm install --global @opencode/cli
+          files=$(tr '\n' ' ' < conflict-files.txt)
+          timeout 10m opencode run --standalone --auto --agent build \
+            --model opencode/deepseek-v4.1-flash-free#high \
+            "Resolve the git merge conflicts in this repository. Conflicted files: $files. We are merging upstream/main into our fork's main. Preserve BOTH upstream improvements and our local customizations (date resolution, archive action, expanded tag completion). Use shell commands to inspect the conflict markers, edit the files, run 'git add' on resolved files, then 'git commit --no-edit' to finish the merge. Do NOT push. Do NOT use --force. Keep changes minimal and do not touch unrelated files."
+
+      - name: Verify and push
+        run: |
+          if git diff --name-only --diff-filter=U | grep -q .; then
+            echo "::error::Conflicts remain after agent resolution"
             exit 1
           fi
+          git push origin main
