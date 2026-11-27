@@ -122,14 +122,11 @@ impl LanguageServer for Backend {
                     let seen = notified.lock().await;
                     due.retain(|task| !seen.contains(&task.key));
                 }
-                let Some(next_alarm) = due.iter().map(|task| task.alarm_at).min() else {
+                let Some(next_task) = due.iter().min_by_key(|task| task.alarm_at).cloned() else {
                     notify.notified().await;
                     continue;
                 };
-                let delay = next_alarm
-                    .signed_duration_since(chrono::Local::now())
-                    .to_std()
-                    .unwrap_or_default();
+                let delay = reminders::delay_until_alarm(&next_task);
                 tokio::select! {
                     _ = tokio::time::sleep(delay) => {
                         let open = documents
