@@ -160,6 +160,7 @@ impl LanguageServer for Backend {
                 "high", "medium", "low", "critical",
                 "done", "cancelled", "started", "est", "lasted",
                 "blocked", "waiting", "legacy_upstream_tag",
+                "specialized_agent_test_tag",
             ];
 
             for tag in common_tags {
