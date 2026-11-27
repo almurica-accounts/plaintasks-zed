@@ -1,10 +1,8 @@
 mod extra;
-mod reminders;
 
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::HashMap;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -25,20 +23,14 @@ struct DocumentState {
 
 struct Backend {
     client: Client,
-    documents: Arc<tokio::sync::RwLock<HashMap<String, DocumentState>>>,
-    workspace_folders: tokio::sync::RwLock<Vec<String>>,
-    notified: Arc<tokio::sync::Mutex<HashSet<String>>>,
-    reminder_notify: Arc<tokio::sync::Notify>,
+    documents: tokio::sync::RwLock<HashMap<String, DocumentState>>,
 }
 
 impl Backend {
     fn new(client: Client) -> Self {
         Self {
             client,
-            documents: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            workspace_folders: tokio::sync::RwLock::new(Vec::new()),
-            notified: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
-            reminder_notify: Arc::new(tokio::sync::Notify::new()),
+            documents: tokio::sync::RwLock::new(HashMap::new()),
         }
     }
 
@@ -63,30 +55,11 @@ impl Backend {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        if let Some(folders) = &params.workspace_folders {
-            let paths = folders
-                .iter()
-                .filter_map(|folder| folder.uri.to_file_path().ok())
-                .map(|path| path.to_string_lossy().to_string())
-                .collect::<Vec<_>>();
-            *self.workspace_folders.write().await = paths;
-        } else if let Some(root) = &params.root_uri {
-            if let Ok(path) = root.to_file_path() {
-                *self.workspace_folders.write().await = vec![path.to_string_lossy().to_string()];
-            }
-        }
+    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Options(
-                    TextDocumentSyncOptions {
-                        open_close: Some(true),
-                        change: Some(TextDocumentSyncKind::FULL),
-                        save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
-                            include_text: Some(true),
-                        })),
-                        ..Default::default()
-                    },
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                    TextDocumentSyncKind::FULL,
                 )),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec!["@".to_string()]),
@@ -103,63 +76,6 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "PlainTasks LSP initialized")
             .await;
-
-        let client = self.client.clone();
-        let folders = self.workspace_folders.read().await.clone();
-        let documents = self.documents.clone();
-        let notified = self.notified.clone();
-        let notify = self.reminder_notify.clone();
-        tokio::spawn(async move {
-            loop {
-                let open = documents
-                    .read()
-                    .await
-                    .iter()
-                    .map(|(uri, doc)| (uri.clone(), doc.content.clone()))
-                    .collect::<Vec<_>>();
-                let mut due = reminders::collect(&folders, &open);
-                {
-                    let seen = notified.lock().await;
-                    due.retain(|task| !seen.contains(&task.key));
-                }
-                let Some(next_task) = due.iter().min_by_key(|task| task.alarm_at).cloned() else {
-                    notify.notified().await;
-                    continue;
-                };
-                let delay = reminders::delay_until_alarm(&next_task);
-                tokio::select! {
-                    _ = tokio::time::sleep(delay) => {
-                        let open = documents
-                            .read()
-                            .await
-                            .iter()
-                            .map(|(uri, doc)| (uri.clone(), doc.content.clone()))
-                            .collect::<Vec<_>>();
-                        let mut ready = reminders::collect(&folders, &open);
-                        let now = chrono::Local::now();
-                        let mut seen = notified.lock().await;
-                        ready.retain(|task| {
-                            task.alarm_at <= now && !seen.contains(&task.key)
-                        });
-                        for task in &ready {
-                            seen.insert(task.key.clone());
-                        }
-                        drop(seen);
-                        if ready.is_empty() {
-                            continue;
-                        }
-                        reminders::send_notification(&ready);
-                        client
-                            .show_message(
-                                MessageType::INFO,
-                                reminders::title(&ready),
-                            )
-                            .await;
-                    }
-                    _ = notify.notified() => {}
-                }
-            }
-        });
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
@@ -170,7 +86,6 @@ impl LanguageServer for Backend {
             uri,
             DocumentState { content },
         );
-        self.reminder_notify.notify_one();
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -213,23 +128,11 @@ impl LanguageServer for Backend {
                     .await;
             }
         }
-        self.reminder_notify.notify_one();
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
         self.documents.write().await.remove(&uri);
-        self.reminder_notify.notify_one();
-    }
-
-    async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        let uri = params.text_document.uri.to_string();
-        if let Some(text) = params.text {
-            if let Some(doc) = self.documents.write().await.get_mut(&uri) {
-                doc.content = text;
-            }
-        }
-        self.reminder_notify.notify_one();
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
