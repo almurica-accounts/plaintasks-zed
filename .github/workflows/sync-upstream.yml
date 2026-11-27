@@ -5,6 +5,11 @@ on:
     # 03:00 UTC on the 1st of every month
     - cron: "0 3 1 * *"
   workflow_dispatch:
+    inputs:
+      simulate_conflict:
+        description: "Test only: merge the test-conflict branch instead of upstream"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -25,11 +30,19 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/cseelus/plaintasks-zed.git
           git fetch upstream main
+          REF=upstream/main
+          if [ "${{ inputs.simulate_conflict }}" = "true" ]; then
+            git fetch origin test-conflict
+            REF=origin/test-conflict
+          fi
+          echo "$REF" > merge-ref.txt
 
       - name: Merge upstream into fork
         id: merge
         run: |
-          if git merge --no-edit upstream/main; then
+          REF=$(cat merge-ref.txt)
+          echo "Merging $REF"
+          if git merge --no-edit "$REF"; then
             echo "conflict=false" >> "$GITHUB_OUTPUT"
           else
             echo "conflict=true" >> "$GITHUB_OUTPUT"
