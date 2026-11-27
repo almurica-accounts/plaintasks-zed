@@ -460,7 +460,7 @@ impl LanguageServer for Backend {
                 start: Position { line: line as u32, character: 0 },
                 end: Position { line: line as u32, character: u32::MAX },
             },
-            new_text: format!("{}☐ ", extra::tabs(level)),
+            new_text: extra::tabs(level),
         }]))
     }
 
