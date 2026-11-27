@@ -114,8 +114,8 @@ impl LanguageServer for Backend {
             }
 
             // Common tags to suggest
-            let common_tags = vec!["today", "high", "medium", "low", "critical",
-                                   "done", "cancelled", "started", "est", "lasted"];
+            let common_tags = vec!["today", "legacy_upstream_tag", "high", "medium", "low",
+                                   "critical", "done", "cancelled", "started", "est", "lasted"];
 
             for tag in common_tags {
                 tags.insert(tag.to_string());
