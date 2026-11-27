@@ -56,7 +56,7 @@ jobs:
         run: |
           npm install --global @opencode/cli
           files=$(tr '\n' ' ' < conflict-files.txt)
-          timeout 10m opencode run --standalone --auto --agent build \
+          timeout 10m opencode run --standalone --auto --agent conflict-resolver \
             --model opencode/deepseek-v4.1-flash-free#high \
             "Resolve the git merge conflicts in this repository. Conflicted files: $files. We are merging upstream/main into our fork's main. Preserve BOTH upstream improvements and our local customizations (date resolution, archive action, expanded tag completion). Use shell commands to inspect the conflict markers, edit the files, run 'git add' on resolved files, then 'git commit --no-edit' to finish the merge. Do NOT push. Do NOT use --force. Keep changes minimal and do not touch unrelated files."
 
