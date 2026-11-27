@@ -343,10 +343,8 @@ impl LanguageServer for Backend {
                 let is_project = line.trim_end().ends_with(':');
 
                 if !is_todo && !is_project {
-                    // Extract current indentation
-                    let indent = line.chars()
-                        .take_while(|c| c.is_whitespace())
-                        .collect::<String>();
+                    // New tasks use tab indentation.
+                    let indent = extra::tabs(extra::indent_level(&line));
 
                     // Get content after indentation
                     let content = line.trim_start();
@@ -403,10 +401,8 @@ impl LanguageServer for Backend {
                 }
 
                 // Always offer "Insert New Todo Below" action
-                // Extract indentation from current line to maintain nesting
-                let indent = line.chars()
-                    .take_while(|c| c.is_whitespace())
-                    .collect::<String>();
+                // Maintain nesting level using tab indentation.
+                let indent = extra::tabs(extra::indent_level(&line));
 
                 actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                     title: "Insert new Todo item below".to_string(),

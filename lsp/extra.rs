@@ -2,6 +2,33 @@ use chrono::{Datelike, Duration, Local, NaiveDate};
 use lazy_static::lazy_static;
 use regex::Regex;
 
+/// Leading whitespace level: tabs count as one level, two spaces as one level.
+pub fn indent_level(line: &str) -> usize {
+    let mut level = 0usize;
+    let mut spaces = 0usize;
+    for ch in line.chars() {
+        match ch {
+            '\t' => {
+                level += 1;
+                spaces = 0;
+            }
+            ' ' => {
+                spaces += 1;
+                if spaces >= 2 {
+                    level += 1;
+                    spaces = 0;
+                }
+            }
+            _ => break,
+        }
+    }
+    level
+}
+
+pub fn tabs(level: usize) -> String {
+    "\t".repeat(level)
+}
+
 lazy_static! {
     static ref TASK_LINE: Regex = Regex::new(r"^(\s*)([☐✔✘])\s+(.*)$").unwrap();
     static ref TAG: Regex = Regex::new(r"(?:^|\s)(@[A-Za-z][\w-]*(?:\([^)]*\))?)").unwrap();
@@ -309,7 +336,7 @@ pub fn archive_completed(content: &str) -> Option<String> {
             if TASK_LINE.is_match(&line) {
                 let caps = TASK_LINE.captures(&line).unwrap();
                 format!(
-                    "  {} {}",
+                    "\t{} {}",
                     caps.get(2).unwrap().as_str(),
                     caps.get(3).unwrap().as_str()
                 )
@@ -463,7 +490,7 @@ mod tests {
     fn archives_done_tasks() {
         let input = "Inbox:\n  ☐ Open\n  ✔ Done @done(26-11-26 10:00)\nArchive:\n";
         let output = archive_completed(input).unwrap();
-        assert!(output.contains("Inbox:\n  ☐ Open\nArchive:\n  ✔ Done"));
+        assert!(output.contains("Inbox:\n  ☐ Open\nArchive:\n\t✔ Done"));
     }
 
     #[test]
@@ -486,5 +513,13 @@ mod tests {
         assert!(output.contains("B @due("));
         assert!(!output.contains("tomorrow"));
         assert!(!output.contains("@next_week"));
+    }
+
+    #[test]
+    fn indentation_uses_tabs() {
+        assert_eq!(indent_level("  ☐ task"), 1);
+        assert_eq!(indent_level("\t☐ task"), 1);
+        assert_eq!(indent_level("    ☐ task"), 2);
+        assert_eq!(tabs(2), "\t\t");
     }
 }
