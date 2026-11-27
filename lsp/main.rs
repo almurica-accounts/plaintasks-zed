@@ -159,7 +159,7 @@ impl LanguageServer for Backend {
                 "due", "section", "project",
                 "high", "medium", "low", "critical",
                 "done", "cancelled", "started", "est", "lasted",
-                "blocked", "waiting",
+                "blocked", "waiting", "legacy_upstream_tag",
             ];
 
             for tag in common_tags {
