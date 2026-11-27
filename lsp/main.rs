@@ -66,6 +66,12 @@ impl LanguageServer for Backend {
                     ..Default::default()
                 }),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                document_on_type_formatting_provider: Some(
+                    DocumentOnTypeFormattingOptions {
+                        first_trigger_character: "\n".to_string(),
+                        more_trigger_character: None,
+                    },
+                ),
                 ..Default::default()
             },
             ..Default::default()
@@ -430,6 +436,32 @@ impl LanguageServer for Backend {
         }
 
         Ok(None)
+    }
+
+    async fn on_type_formatting(
+        &self,
+        params: DocumentOnTypeFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        if params.ch != "\n" {
+            return Ok(None);
+        }
+        let uri = params.text_document_position.text_document.uri;
+        let line = params.text_document_position.position.line as usize;
+        let documents = self.documents.read().await;
+        let Some(doc) = documents.get(&uri.to_string()) else {
+            return Ok(None);
+        };
+        let lines = doc.content.split('\n').map(|value| value.to_string()).collect::<Vec<_>>();
+        let Some(level) = extra::new_task_level(&lines, line) else {
+            return Ok(None);
+        };
+        Ok(Some(vec![TextEdit {
+            range: Range {
+                start: Position { line: line as u32, character: 0 },
+                end: Position { line: line as u32, character: u32::MAX },
+            },
+            new_text: format!("{}☐ ", extra::tabs(level)),
+        }]))
     }
 
     async fn shutdown(&self) -> Result<()> {

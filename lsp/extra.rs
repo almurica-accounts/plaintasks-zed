@@ -3,6 +3,25 @@ use lazy_static::lazy_static;
 use regex::Regex;
 
 /// Leading whitespace level: tabs count as one level, two spaces as one level.
+/// Return the tab level for an empty task line inserted after `lines[index - 1]`,
+/// or None when the current line is not a fresh task line.
+pub fn new_task_level(lines: &[String], index: usize) -> Option<usize> {
+    if index == 0 || index >= lines.len() {
+        return None;
+    }
+    let current = lines[index].trim();
+    if !(current.is_empty() || current == "☐" || current == "✔" || current == "✘") {
+        return None;
+    }
+    let previous = &lines[index - 1];
+    let level = indent_level(previous);
+    if previous.trim_end().ends_with(':') {
+        Some(level + 1)
+    } else {
+        Some(level)
+    }
+}
+
 pub fn indent_level(line: &str) -> usize {
     let mut level = 0usize;
     let mut spaces = 0usize;
@@ -521,5 +540,24 @@ mod tests {
         assert_eq!(indent_level("\t☐ task"), 1);
         assert_eq!(indent_level("    ☐ task"), 2);
         assert_eq!(tabs(2), "\t\t");
+    }
+
+    #[test]
+    fn new_task_indents_under_sections_and_siblings_tasks() {
+        let lines = vec![
+            "Inbox:".to_string(),
+            "  ☐ Existing".to_string(),
+            "".to_string(),
+        ];
+        assert_eq!(new_task_level(&lines, 2), Some(1));
+        let lines = vec![
+            "Work:".to_string(),
+            "\tProject:".to_string(),
+            "\t\t☐ Child".to_string(),
+            "".to_string(),
+        ];
+        assert_eq!(new_task_level(&lines, 3), Some(2));
+        let lines = vec!["Inbox:".to_string(), "".to_string()];
+        assert_eq!(new_task_level(&lines, 1), Some(1));
     }
 }
