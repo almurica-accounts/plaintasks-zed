@@ -1,3 +1,5 @@
+mod extra;
+
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::collections::HashMap;
@@ -87,10 +89,43 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        let uri = params.text_document.uri.to_string();
-        if let Some(change) = params.content_changes.first() {
-            if let Some(doc) = self.documents.write().await.get_mut(&uri) {
-                doc.content = change.text.clone();
+        let uri = params.text_document.uri.clone();
+        let uri_key = uri.to_string();
+        let Some(change) = params.content_changes.first() else {
+            return;
+        };
+        let content = change.text.clone();
+        if let Some(doc) = self.documents.write().await.get_mut(&uri_key) {
+            doc.content = content.clone();
+        }
+
+        let mut edits = Vec::new();
+        for (line_number, line) in content.lines().enumerate() {
+            if let Some(resolved) = extra::resolve_date_tags(line) {
+                edits.push(TextEdit {
+                    range: Range {
+                        start: Position {
+                            line: line_number as u32,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: line_number as u32,
+                            character: u32::MAX,
+                        },
+                    },
+                    new_text: resolved,
+                });
+            }
+        }
+        if !edits.is_empty() {
+            let edit = WorkspaceEdit {
+                changes: Some(HashMap::from([(uri, edits)])),
+                ..Default::default()
+            };
+            if let Err(error) = self.client.apply_edit(edit).await {
+                self.client
+                    .log_message(MessageType::WARNING, format!("auto-resolve failed: {error}"))
+                    .await;
             }
         }
     }
@@ -114,8 +149,18 @@ impl LanguageServer for Backend {
             }
 
             // Common tags to suggest
-            let common_tags = vec!["today", "high", "medium", "low", "critical",
-                                   "done", "cancelled", "started", "est", "lasted"];
+            let common_tags = vec![
+                "today", "tomorrow", "tonight", "yesterday",
+                "next_week", "next_month", "next_year",
+                "next_monday", "next_tuesday", "next_wednesday",
+                "next_thursday", "next_friday", "next_saturday", "next_sunday",
+                "end_of_week", "end_of_month",
+                "in_3_days", "in_2_weeks",
+                "due", "section", "project",
+                "high", "medium", "low", "critical",
+                "done", "cancelled", "started", "est", "lasted",
+                "blocked", "waiting",
+            ];
 
             for tag in common_tags {
                 tags.insert(tag.to_string());
@@ -145,6 +190,34 @@ impl LanguageServer for Backend {
         if let Some(doc) = documents.get(&uri) {
             if let Some((line, _line_start, _line_end)) = self.get_line_at_position(&doc.content, position) {
                 let mut actions = Vec::new();
+
+                // Archive completed/cancelled tasks
+                if DONE_PATTERN.is_match(&line)
+                    || CANCELLED_PATTERN.is_match(&line)
+                    || line.trim_end().eq_ignore_ascii_case("Archive:")
+                {
+                    if let Some(updated) = extra::archive_completed(&doc.content) {
+                        let line_count = doc.content.lines().count() as u32;
+                        actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                            title: "Archive completed tasks".to_string(),
+                            kind: Some(CodeActionKind::REFACTOR),
+                            edit: Some(WorkspaceEdit {
+                                changes: Some(HashMap::from([(
+                                    params.text_document.uri.clone(),
+                                    vec![TextEdit {
+                                        range: Range {
+                                            start: Position { line: 0, character: 0 },
+                                            end: Position { line: line_count, character: 0 },
+                                        },
+                                        new_text: updated,
+                                    }],
+                                )])),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }));
+                    }
+                }
 
                 // Check for pending task
                 if PENDING_PATTERN.is_match(&line) {
@@ -297,6 +370,29 @@ impl LanguageServer for Backend {
                                         end: Position { line: position.line, character: u32::MAX },
                                     },
                                     new_text: new_line,
+                                }],
+                            )])),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }));
+                }
+
+                // Resolve date keywords in the whole document
+                if let Some(updated) = extra::resolve_file_dates(&doc.content) {
+                    let line_count = doc.content.lines().count() as u32;
+                    actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                        title: "Resolve date keywords in file".to_string(),
+                        kind: Some(CodeActionKind::REFACTOR),
+                        edit: Some(WorkspaceEdit {
+                            changes: Some(HashMap::from([(
+                                params.text_document.uri.clone(),
+                                vec![TextEdit {
+                                    range: Range {
+                                        start: Position { line: 0, character: 0 },
+                                        end: Position { line: line_count, character: 0 },
+                                    },
+                                    new_text: updated,
                                 }],
                             )])),
                             ..Default::default()
