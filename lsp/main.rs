@@ -1,8 +1,11 @@
 mod extra;
+mod reminders;
 
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use tokio::time::{interval, Duration as TokioDuration};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -23,14 +26,18 @@ struct DocumentState {
 
 struct Backend {
     client: Client,
-    documents: tokio::sync::RwLock<HashMap<String, DocumentState>>,
+    documents: Arc<tokio::sync::RwLock<HashMap<String, DocumentState>>>,
+    workspace_folders: tokio::sync::RwLock<Vec<String>>,
+    notified: Arc<tokio::sync::Mutex<HashSet<String>>>,
 }
 
 impl Backend {
     fn new(client: Client) -> Self {
         Self {
             client,
-            documents: tokio::sync::RwLock::new(HashMap::new()),
+            documents: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            workspace_folders: tokio::sync::RwLock::new(Vec::new()),
+            notified: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
         }
     }
 
@@ -55,7 +62,19 @@ impl Backend {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        if let Some(folders) = &params.workspace_folders {
+            let paths = folders
+                .iter()
+                .filter_map(|folder| folder.uri.to_file_path().ok())
+                .map(|path| path.to_string_lossy().to_string())
+                .collect::<Vec<_>>();
+            *self.workspace_folders.write().await = paths;
+        } else if let Some(root) = &params.root_uri {
+            if let Ok(path) = root.to_file_path() {
+                *self.workspace_folders.write().await = vec![path.to_string_lossy().to_string()];
+            }
+        }
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -76,6 +95,41 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "PlainTasks LSP initialized")
             .await;
+
+        let client = self.client.clone();
+        let folders = self.workspace_folders.read().await.clone();
+        let documents = self.documents.clone();
+        let notified = self.notified.clone();
+        tokio::spawn(async move {
+            let mut timer = interval(TokioDuration::from_secs(3600));
+            loop {
+                timer.tick().await;
+                let open = documents
+                    .read()
+                    .await
+                    .iter()
+                    .map(|(uri, doc)| (uri.clone(), doc.content.clone()))
+                    .collect::<Vec<_>>();
+                let mut due = reminders::collect(&folders, &open);
+                {
+                    let mut seen = notified.lock().await;
+                    due.retain(|task| !seen.contains(&task.key));
+                    for task in &due {
+                        seen.insert(task.key.clone());
+                    }
+                }
+                if due.is_empty() {
+                    continue;
+                }
+                reminders::send_notification(&due);
+                client
+                    .show_message(
+                        MessageType::INFO,
+                        format!("PlainTasks: {} due task(s)", due.len()),
+                    )
+                    .await;
+            }
+        });
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
