@@ -446,7 +446,8 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         let uri = params.text_document_position.text_document.uri;
-        let line = params.text_document_position.position.line as usize;
+        let position = params.text_document_position.position;
+        let line = position.line as usize;
         let documents = self.documents.read().await;
         let Some(doc) = documents.get(&uri.to_string()) else {
             return Ok(None);
@@ -455,12 +456,11 @@ impl LanguageServer for Backend {
         let Some(level) = extra::new_task_level(&lines, line) else {
             return Ok(None);
         };
+        // Insert at the cursor rather than replacing the line so the caret
+        // ends up after the checkbox.
         Ok(Some(vec![TextEdit {
-            range: Range {
-                start: Position { line: line as u32, character: 0 },
-                end: Position { line: line as u32, character: u32::MAX },
-            },
-            new_text: extra::tabs(level),
+            range: Range { start: position, end: position },
+            new_text: format!("{}☐ ", extra::tabs(level)),
         }]))
     }
 

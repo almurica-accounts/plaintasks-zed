@@ -15,7 +15,7 @@ pub fn new_task_level(lines: &[String], index: usize) -> Option<usize> {
     }
     let previous = &lines[index - 1];
     let level = indent_level(previous);
-    if previous.trim_end().ends_with(':') {
+    if SECTION_LINE.is_match(previous) {
         Some(level + 1)
     } else {
         Some(level)
@@ -40,6 +40,9 @@ pub fn indent_level(line: &str) -> usize {
             }
             _ => break,
         }
+    }
+    if spaces > 0 {
+        level += 1;
     }
     level
 }
@@ -348,22 +351,34 @@ pub fn archive_completed(content: &str) -> Option<String> {
     }
     blocks.reverse();
 
-    let adjusted: Vec<String> = blocks
-        .into_iter()
-        .flatten()
-        .map(|line| {
+    let mut adjusted: Vec<String> = Vec::new();
+    for block in blocks {
+        let base_level = block
+            .iter()
+            .find(|line| TASK_LINE.is_match(line))
+            .map(|line| indent_level(line))
+            .unwrap_or(1);
+        for line in block {
+            if line.trim().is_empty() {
+                adjusted.push(line);
+                continue;
+            }
+            let level = indent_level(&line);
+            let relative = level.saturating_sub(base_level);
+            let indent = tabs(1 + relative);
             if TASK_LINE.is_match(&line) {
                 let caps = TASK_LINE.captures(&line).unwrap();
-                format!(
-                    "\t{} {}",
+                adjusted.push(format!(
+                    "{}{} {}",
+                    indent,
                     caps.get(2).unwrap().as_str(),
                     caps.get(3).unwrap().as_str()
-                )
+                ));
             } else {
-                line
+                adjusted.push(format!("{}{}", indent, line.trim_start()));
             }
-        })
-        .collect();
+        }
+    }
 
     let archive_start = lines
         .iter()
@@ -559,5 +574,14 @@ mod tests {
         assert_eq!(new_task_level(&lines, 3), Some(2));
         let lines = vec!["Inbox:".to_string(), "".to_string()];
         assert_eq!(new_task_level(&lines, 1), Some(1));
+    }
+
+    #[test]
+    fn archive_preserves_nested_tasks() {
+        let input = "Inbox:\n  ✔ Parent @done(26-11-26 10:00)\n    ✔ Child @done(26-11-26 11:00)\nArchive:\n";
+        let output = archive_completed(input).unwrap();
+        assert!(output.contains(
+            "Archive:\n\t✔ Parent @done(26-11-26 10:00)\n\t\t✔ Child @done(26-11-26 11:00)\n"
+        ));
     }
 }
